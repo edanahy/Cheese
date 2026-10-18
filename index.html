@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║  QUICK CONFIG: edit these for your event                         ║
+// ╚══════════════════════════════════════════════════════════════════╝
+
+// One cheese per plate, in order: Plate 1, Plate 2, Plate 3.
+// Settings → Cheeses can override these live on the tablet. Those overrides
+// are dropped automatically whenever you edit this list.
+const CHEESES = [
+  { name: 'Brie',       description: 'Soft & buttery · France',   color: '#f2e6c2' },
+  { name: 'Aged Gouda', description: 'Nutty & caramel · Holland', color: '#e3a857' },
+  { name: 'Manchego',   description: 'Firm & tangy · Spain',      color: '#f0cf7a' },
+];
+
+const TITLE = 'The Cheese Course';
+
+// Starting calibration. Values changed in Settings are saved on the device and
+// take priority. Settings → "Reset to file defaults" returns to these.
+const DEFAULT_SETTINGS = {
+  carriage: {                // Single motor: position counter, in degrees
+    home: 0, plate1: 360, plate2: 720, plate3: 1080,
+    speed: 50,               // %
+  },
+  skewer: {                  // Double motor: position counter in degrees (left motor), measured from where you last zeroed
+    up: 0, down: 180,
+    rightMotor: 'same',      // 'same' or 'opposite': flip this if the two motors fight
+    speed: 40,               // %
+    dwellMs: 300,            // pause with the skewer down
+  },
+};
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#15120f">
+<title>Cheese Service</title>
+<style>
+  :root {
+    --bg: #15120f;
+    --surface: #1e1a16;
+    --surface-2: #262019;
+    --line: rgba(236, 222, 196, 0.14);
+    --text: #f3ead8;
+    --muted: #b3a68e;
+    --gold: #d4af6a;
+    --danger: #d9534f;
+    --ok: #86b56e;
+    --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', 'Noto Serif', Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: radial-gradient(1200px 640px at 50% -12%, #2c2219 0%, var(--bg) 62%) fixed, var(--bg);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* ── Main screen ── */
+  .app {
+    min-height: 100dvh;
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    padding-bottom: clamp(16px, 3vh, 32px);
+  }
+
+  .topbar {
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    padding: 16px clamp(16px, 3vw, 40px) 0;
+  }
+  .brand {
+    font-family: var(--serif); color: var(--gold);
+    font-size: 0.95rem; letter-spacing: 0.32em; text-transform: uppercase;
+  }
+  .top-right { display: flex; align-items: center; gap: 16px; }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+  .conn i { width: 8px; height: 8px; border-radius: 50%; background: #5d5246; }
+  .conn.on i { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .gear {
+    width: 48px; height: 48px; border-radius: 50%;
+    display: grid; place-items: center;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .gear:hover { color: var(--text); border-color: var(--muted); }
+  .gear svg { width: 22px; height: 22px; }
+
+  .message { text-align: center; padding: clamp(16px, 4vh, 44px) 16px clamp(16px, 3vh, 32px); }
+  .message h1 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: clamp(2rem, 4.6vw, 3.6rem); line-height: 1.15;
+  }
+  .message p { color: var(--muted); font-size: clamp(1rem, 1.6vw, 1.3rem); margin-top: 8px; min-height: 1.5em; }
+  .message::after {
+    content: ''; display: block; width: 64px; height: 1px; margin: 18px auto 0;
+    background: var(--gold); opacity: 0.6;
+  }
+  body[data-mode="served"] .message h1 { color: var(--gold); }
+  body[data-mode="error"] .message h1,
+  body[data-mode="stopped"] .message h1 { color: #e8a49f; }
+
+  .tiles {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: clamp(12px, 2vw, 24px);
+    padding: 0 clamp(16px, 3vw, 40px);
+  }
+  .tile {
+    --cheese: var(--gold);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    min-height: 220px; padding: 24px 16px;
+    border-radius: 24px; border: 1px solid var(--line);
+    background:
+      radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--cheese) 16%, transparent), transparent 70%),
+      var(--surface);
+    color: var(--text); font: inherit; text-align: center; cursor: pointer;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    transition: transform 0.12s ease, opacity 0.3s, filter 0.3s, border-color 0.2s, box-shadow 0.3s;
+  }
+  .tile:active { transform: scale(0.97); }
+  .tile-label { font-size: 0.78rem; letter-spacing: 0.24em; text-transform: uppercase; color: var(--gold); }
+  .tile-icon { width: clamp(64px, 9vw, 120px); height: auto; color: var(--cheese); }
+  .tile-icon .hole { fill: var(--surface); }
+  .tile-name { font-family: var(--serif); font-size: clamp(1.6rem, 3.2vw, 2.8rem); line-height: 1.1; }
+  .tile-desc { color: var(--muted); font-style: italic; font-size: clamp(0.85rem, 1.3vw, 1.05rem); }
+  .tile-home { background: transparent; border-style: dashed; }
+
+  .tile.is-active { border-color: var(--gold); animation: glow 1.6s ease-in-out infinite; }
+  .tile.is-served { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 0 50px -10px var(--gold); }
+  .tile.is-dim { opacity: 0.3; }
+  .tile.is-unavailable { opacity: 0.45; filter: saturate(0.4); }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 0 2px var(--gold), 0 0 28px -10px var(--gold); }
+    50%      { box-shadow: 0 0 0 2px var(--gold), 0 0 64px -4px var(--gold); }
+  }
+  @media (prefers-reduced-motion: reduce) { .tile.is-active { animation: none; box-shadow: 0 0 0 2px var(--gold); } }
+
+  .stop {
+    position: fixed; left: 50%; bottom: clamp(16px, 4vh, 40px); transform: translateX(-50%);
+    min-width: 240px; padding: 18px 48px; border: 0; border-radius: 999px;
+    background: var(--danger); color: #fff; cursor: pointer;
+    font: 700 1.4rem var(--sans); letter-spacing: 0.14em; text-transform: uppercase;
+    box-shadow: 0 10px 34px -8px rgba(217, 83, 79, 0.75);
+  }
+  body:not(.is-busy) .stop { display: none; }
+
+  .toast {
+    position: fixed; left: 50%; top: 24px; transform: translate(-50%, -20px);
+    max-width: calc(100% - 32px); padding: 12px 20px; border-radius: 12px;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 760px) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .tile { min-height: 180px; }
+    .conn span { display: none; }
+  }
+
+  /* ── Settings dialog ── */
+  dialog#settings {
+    width: min(1000px, calc(100% - 32px)); max-height: calc(100dvh - 32px);
+    margin: auto; padding: 0; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 18px;
+    background: var(--surface); color: var(--text);
+  }
+  dialog#settings[open] { display: flex; flex-direction: column; }
+  dialog::backdrop { background: rgba(10, 8, 6, 0.7); backdrop-filter: blur(4px); }
+
+  .dlg-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+  }
+  .dlg-head h2 { font-family: var(--serif); font-weight: 500; font-size: 1.5rem; }
+  .dlg-status {
+    flex: 1; min-width: 120px; color: var(--muted); font-size: 0.82rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dlg-body { overflow: auto; padding: 20px; display: grid; gap: 18px; }
+
+  .panel { border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; background: var(--surface-2); }
+  .panel h3 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+  .panel h3 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { display: grid; gap: 10px; align-content: start; }
+  .card-head { display: flex; align-items: center; gap: 8px; }
+  .card-head .muted { color: var(--muted); font-size: 0.85rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #5d5246; }
+  .dot.on { background: var(--ok); }
+
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .row + .row, .rows + .row, .fields + .row { margin-top: 12px; }
+  .row .label { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
+  .pos-row {
+    display: grid; grid-template-columns: 220px 110px auto auto; justify-content: start;
+    align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line);
+  }
+  .cheese-row {
+    display: grid; grid-template-columns: 70px minmax(120px, 1fr) minmax(160px, 1.6fr) 52px;
+    align-items: center; gap: 8px; padding: 6px 0;
+  }
+  .pos-label { font-size: 0.92rem; }
+  .pos-label em { color: var(--muted); font-size: 0.85rem; margin-left: 4px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+  .fields label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+
+  .btn {
+    font: inherit; font-size: 0.9rem; min-height: 40px; padding: 8px 14px;
+    border-radius: 10px; border: 1px solid var(--line);
+    background: transparent; color: var(--text); cursor: pointer;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--gold); border-color: var(--gold); color: #1b150c; font-weight: 600; }
+  .btn.danger { border-color: var(--danger); color: #f2b8b5; }
+  .icon-btn { font-size: 1.5rem; line-height: 1; width: 40px; padding: 0; }
+
+  input, select {
+    font: inherit; font-size: 0.92rem; min-height: 40px; padding: 8px 10px; width: 100%;
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  }
+  input[type="color"] { padding: 3px; cursor: pointer; }
+
+  .readout, .log {
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.55; color: var(--muted);
+    background: var(--bg); border-radius: 8px; padding: 10px 12px;
+    white-space: pre; overflow-x: auto;
+  }
+  .log { max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+  .hint { color: var(--muted); font-size: 0.82rem; line-height: 1.5; margin-top: 10px; }
+
+  @media (max-width: 560px) {
+    .pos-row { grid-template-columns: 1fr 1fr; }
+    .cheese-row { grid-template-columns: 1fr 52px; }
+    .cheese-row .pos-label { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body data-mode="idle">
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand" id="brand"></div>
+    <div class="top-right">
+      <span class="conn" id="conn-single" title="Single motor (carriage)"><i></i><span>Carriage</span></span>
+      <span class="conn" id="conn-double" title="Double motor (skewer)"><i></i><span>Skewer</span></span>
+      <button class="gear" onclick="openSettings()" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="message" aria-live="polite">
+    <h1 id="msg-title"></h1>
+    <p id="msg-detail"></p>
+  </section>
+
+  <main class="tiles" id="tiles"></main>
+</div>
+
+<button class="stop" onclick="emergencyStop()">Stop</button>
+<div class="toast" id="toast" role="status"></div>
+
+<!-- ===================== Settings ===================== -->
+<dialog id="settings">
+  <div class="dlg-head">
+    <h2>Settings</h2>
+    <span class="dlg-status" id="dlg-status"></span>
+    <button class="btn danger" onclick="emergencyStop()">Stop motors</button>
+    <button class="btn" onclick="toggleFullscreen()">Fullscreen</button>
+    <button class="btn icon-btn" onclick="closeSettings()" aria-label="Close settings" autofocus>&times;</button>
+  </div>
+
+  <div class="dlg-body">
+    <section class="panel">
+      <h3>Connections</h3>
+      <div class="cols">
+        <div class="card">
+          <div class="card-head"><span class="dot" id="dot-single"></span><strong>Single Motor</strong><span class="muted">carriage</span></div>
+          <div class="row">
+            <button class="btn primary" onclick="connectDevice('single')">Connect</button>
+            <button class="btn" onclick="disconnectDevice('single')">Disconnect</button>
+          </div>
+          <div class="readout" id="readout-single">Not connected</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="dot" id="dot-double"></span><strong>Double Motor</strong><span class="muted">skewer</span></div>
+          <div class="row">
+            <button class="btn primary" onclick="connectDevice('double')">Connect</button>
+            <button class="btn" onclick="disconnectDevice('double')">Disconnect</button>
+          </div>
+          <div class="readout" id="readout-double">Not connected</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Carriage positions <small>single motor · degrees</small></h3>
+      <div class="rows" id="carriage-rows"></div>
+      <div class="row">
+        <span class="label">Jog</span>
+        <button class="btn" onclick="jogCarriage(-90)">↺ 90°</button>
+        <button class="btn" onclick="jogCarriage(-10)">↺ 10°</button>
+        <button class="btn" onclick="jogCarriage(10)">10° ↻</button>
+        <button class="btn" onclick="jogCarriage(90)">90° ↻</button>
+      </div>
+      <div class="fields">
+        <label>Travel speed (%) <input type="number" min="5" max="100" data-cfg="carriage.speed"></label>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="rezeroCarriage()">Carriage is at Home right now: re-zero</button>
+      </div>
+      <p class="hint">
+        The single motor's position counter restarts when the motor powers on. At the start of each session,
+        put the carriage at Home (jog it or move it by hand) and press <em>re-zero</em> so the plate positions line up again.
+        "Go" raises the skewer before the carriage moves.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h3>Skewer <small>double motor · relative degrees (left motor)</small></h3>
+      <div class="rows" id="skewer-rows"></div>
+      <div class="row">
+        <span class="label">Jog</span>
+        <button class="btn" onclick="jogSkewer(-90)">−90°</button>
+        <button class="btn" onclick="jogSkewer(-10)">−10°</button>
+        <button class="btn" onclick="jogSkewer(10)">+10°</button>
+        <button class="btn" onclick="jogSkewer(90)">+90°</button>
+        <button class="btn" onclick="zeroSkewer()">Zero here</button>
+        <button class="btn primary" onclick="testStab()">Test stab</button>
+      </div>
+      <div class="fields">
+        <label>Right motor
+          <select data-cfg="skewer.rightMotor">
+            <option value="same">Same direction as left</option>
+            <option value="opposite">Opposite (mirrored)</option>
+          </select>
+        </label>
+        <label>Speed (%) <input type="number" min="5" max="100" data-cfg="skewer.speed"></label>
+        <label>Pause at bottom (ms) <input type="number" min="0" max="5000" step="50" data-cfg="skewer.dwellMs"></label>
+      </div>
+      <p class="hint">
+        Up and Down are measured from wherever you last pressed <em>Zero here</em>, which resets both motors' counters to 0.
+        The counters also restart when the motor powers on, so zero at the same spot each session (with the skewer Up is easiest).
+        A stab goes to Down, pauses, then comes back to Up the way it went.
+        If the two motors fight each other (buzzing or stalling), switch <em>Right motor</em>; a 10° jog is a safe way to check.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h3>Cheeses <small>changes show on the main screen right away</small></h3>
+      <div class="rows" id="cheese-rows"></div>
+      <div class="row">
+        <button class="btn" onclick="restoreCheeses()">Restore cheeses from file</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Saved settings</h3>
+      <div class="row">
+        <button class="btn danger" onclick="resetAllSettings()">Reset to file defaults</button>
+      </div>
+      <p class="hint">
+        Positions, speeds and cheese names are saved in this browser and come back after a refresh.
+        Reset returns everything to the values written at the top of cheese.html (<code>DEFAULT_SETTINGS</code> and <code>CHEESES</code>).
+      </p>
+    </section>
+
+    <section class="panel">
+      <h3>Log</h3>
+      <pre class="log" id="log"></pre>
+    </section>
+  </div>
+</dialog>
+
+<script src="lego-education-ble.js"></script>
+<script>
+const le = legoeducation;
+const CW = le.MOTOR_MOVE_DIRECTION_CLOCKWISE;
+const CCW = le.MOTOR_MOVE_DIRECTION_COUNTERCLOCKWISE;
+
+// Motion tuning
+const CARRIAGE_TOLERANCE = 10;     // degrees from target that count as "arrived"
+const SKEWER_TOLERANCE   = 10;
+const POLL_MS            = 50;
+const START_GRACE_MS     = 350;    // let a move get going before judging whether it has finished
+const SETTLE_MS          = 800;    // motionless this long away from the target = it gave up
+const STALL_MS           = 250;
+const MOVE_TIMEOUT_MS    = 20000;
+const SERVED_MESSAGE_MS  = 15000;
+
+const SETTINGS_KEY = 'cheese-robot.settings';
+const CHEESES_KEY  = 'cheese-robot.cheeses';
+
+const DEVICES = {
+  single: { label: 'Single motor', Class: le.SingleMotor, productId: le.PRODUCT_GROUP_DEVICE_SINGLE_MOTOR },
+  double: { label: 'Double motor', Class: le.DoubleMotor, productId: le.PRODUCT_GROUP_DEVICE_DOUBLE_MOTOR },
+};
+const CARRIAGE_STOPS = [['home', 'Home'], ['plate1', 'Plate 1'], ['plate2', 'Plate 2'], ['plate3', 'Plate 3']];
+const SKEWER_STOPS   = [['up', 'Up', 'skewer raised'], ['down', 'Down', 'skewer stabbing']];
+const MOTOR_STATE_NAMES = ['ready', 'running', 'stalled', 'aborted', 'regulation error', 'disconnected', 'holding', 'dc running', 'not allowed'];
+
+const ICONS = {
+  home: `<svg class="tile-icon" viewBox="0 0 64 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 24 L32 6 L54 24"/><path d="M16 19 V42 H48 V19"/><path d="M27 42 V31 H37 V42"/></svg>`,
+  cheese: `<svg class="tile-icon" viewBox="0 0 64 48" aria-hidden="true"><path d="M6 40 L58 12 L58 40 Z" fill="currentColor" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M58 13 V40" stroke="rgba(0,0,0,.22)" stroke-width="3"/><circle class="hole" cx="44" cy="31" r="3.6"/><circle class="hole" cx="51.5" cy="22" r="2.3"/><circle class="hole" cx="33" cy="35.5" r="2.1"/></svg>`,
+};
+
+let settings = loadSettings();
+let cheeses = loadCheeses();
+const devices = { single: null, double: null };
+let busy = false, stopRequested = false;
+const ui = { mode: 'idle', title: '', detail: '', active: null, servedSlot: null };
+let servedTimer = null, toastTimer = null, wakeLock = null;
+const logLines = [];
+const settingsDialog = document.getElementById('settings');
+
+class StopRequested extends Error {}
+
+// ── Small helpers ──
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const rightMirrored = () => settings.skewer.rightMotor === 'opposite';
+const isMoving = m => m.motorState === le.MOTOR_STATE_RUNNING || Math.abs(m.speed) > 2;
+const isConnected = key => !!devices[key]?.connected;
+const robotReady = () => isConnected('single') && isConnected('double');
+const stopLabel = key => (CARRIAGE_STOPS.find(([k]) => k === key) || [, key])[1];
+
+function checkStop() { if (stopRequested) throw new StopRequested('Stopped'); }
+
+async function pause(ms) {
+  const end = performance.now() + ms;
+  while (performance.now() < end) { checkStop(); await sleep(Math.min(POLL_MS, end - performance.now())); }
+}
+
+function log(msg) {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  console.log(line);
+  logLines.push(line);
+  if (logLines.length > 300) logLines.shift();
+  const el = document.getElementById('log');
+  el.textContent = logLines.join('\n');
+  el.scrollTop = el.scrollHeight;
+  document.getElementById('dlg-status').textContent = msg;
+}
+
+function toast(msg) {
+  if (settingsDialog.open) { log(msg); return; }
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ── Saved settings ──
+function loadSettings() {
+  const merged = structuredClone(DEFAULT_SETTINGS);
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+    // Only keys still in DEFAULT_SETTINGS, so settings from older versions of this page drop out.
+    for (const group in merged) {
+      for (const key in merged[group]) if (saved[group]?.[key] !== undefined) merged[group][key] = saved[group][key];
+    }
+  } catch (e) { /* storage unavailable: use the file defaults */ }
+  return merged;
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+}
+
+// Cheese overrides only apply while CHEESES in this file is unchanged.
+function loadCheeses() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHEESES_KEY));
+    if (saved && saved.base === JSON.stringify(CHEESES)) return saved.list;
+  } catch (e) {}
+  return structuredClone(CHEESES);
+}
+function saveCheeses() {
+  try { localStorage.setItem(CHEESES_KEY, JSON.stringify({ base: JSON.stringify(CHEESES), list: cheeses })); } catch (e) {}
+}
+
+// ── Connections ──
+async function connectDevice(key) {
+  const { label, Class } = DEVICES[key];
+  if (isConnected(key)) { log(`${label} is already connected.`); return; }
+  const dev = new Class();
+  try {
+    log(`${label}: choose it in the Bluetooth picker…`);
+    const info = await dev.connect();
+    const wrong = Object.entries(DEVICES).find(([k, d]) => k !== key && d.productId === info?.productGroupDevice);
+    if (wrong) throw new Error(`that's the ${wrong[1].label.toLowerCase()}. Please pick the ${label.toLowerCase()}.`);
+    dev._onDisconnect = () => { log(`${label} disconnected.`); render(); };
+    devices[key] = dev;
+    log(`${label} connected (firmware ${info?.firmwareVersion ?? 'unknown'}).`);
+    requestWakeLock();
+  } catch (err) {
+    if (dev.connected) await dev.disconnect();
+    log(`${label}: ${err.message}`);
+  }
+  render();
+}
+
+async function disconnectDevice(key) {
+  if (!isConnected(key)) return;
+  if (busy) emergencyStop();
+  await devices[key].disconnect();
+  render();
+}
+
+function need(key) {
+  const dev = devices[key], name = DEVICES[key].label.toLowerCase();
+  if (!dev?.connected) throw new Error(`The ${name} is not connected.`);
+  const motors = key === 'single' ? [dev.motor] : dev.motor;
+  if (motors.some(m => isNaN(m.position))) throw new Error(`No position data from the ${name} yet.`);
+  return dev;
+}
+
+// ── Motion ──
+// Moves are sent without waiting for the device's reply. Instead we watch the live
+// motor notifications, so long moves don't hit the library's 5 s reply timeout.
+// Resolves 'reached', 'stalled', or 'short' (stopped moving, but not at the target).
+async function waitForMove(dev, getMotors, atTarget) {
+  const start = performance.now();
+  let stillSince = null, stalledSince = null;
+  for (;;) {
+    await sleep(POLL_MS);
+    checkStop();
+    if (!dev.connected) throw new Error('A motor disconnected mid-move.');
+    const now = performance.now() - start;
+    if (now < START_GRACE_MS) continue;
+
+    const motors = getMotors();
+    if (motors.some(m => m.motorState === le.MOTOR_STATE_STALLED)) {
+      stalledSince ??= now;
+      if (now - stalledSince >= STALL_MS) return 'stalled';
+    } else {
+      stalledSince = null;
+    }
+
+    if (motors.some(isMoving)) {
+      stillSince = null;
+    } else if (atTarget()) {
+      return 'reached';
+    } else {
+      stillSince ??= now;
+      if (now - stillSince >= SETTLE_MS) return 'short';
+    }
+    if (now > MOVE_TIMEOUT_MS) throw new Error('A move took too long and was cancelled.');
+  }
+}
+
+async function carriageTo(key) {
+  const sm = need('single');
+  const target = Math.round(settings.carriage[key]);
+  const near = () => Math.abs(sm.motor.position - target) <= CARRIAGE_TOLERANCE;
+  if (near() && !isMoving(sm.motor)) return;
+
+  log(`Carriage → ${stopLabel(key)}: ${sm.motor.position}° → ${target}°`);
+  await sm.motor_run_to_relative_position(target, { speed: settings.carriage.speed, blocking: false });
+  const result = await waitForMove(sm, () => [sm.motor], near);
+  if (result !== 'reached') {
+    throw new Error(`The carriage ${result === 'stalled' ? 'stalled' : 'stopped'} at ${sm.motor.position}° on the way to ${stopLabel(key)} (${target}°).`);
+  }
+  log(`Carriage at ${stopLabel(key)} (${sm.motor.position}°)`);
+}
+
+// Move both linked skewer motors so the left one's counter reaches `target`.
+// Resolves like waitForMove: 'reached', 'stalled' or 'short'.
+async function moveSkewer(target, label) {
+  const dm = need('double');
+  target = Math.round(target);
+  const near = () => Math.abs(dm.motor[0].position - target) <= SKEWER_TOLERANCE;
+  // Already there. (Tighter than the tolerance, so small jogs still move.)
+  if (Math.abs(dm.motor[0].position - target) <= 2 && !dm.motor.some(isMoving)) return 'reached';
+
+  const [left, right] = dm.motor.map(m => m.position);
+  // The motors are linked, so their current offset says where the right motor has to end up.
+  const rightTarget = rightMirrored() ? left + right - target : target + right - left;
+
+  log(`Skewer → ${label}: left ${left}° → ${target}°, right ${right}° → ${rightTarget}°`);
+  // Speeds first, then the two moves back-to-back, so the motors start together.
+  await dm.motor_set_speed(settings.skewer.speed, { motor: le.MOTOR_LEFT, blocking: false });
+  await dm.motor_set_speed(settings.skewer.speed, { motor: le.MOTOR_RIGHT, blocking: false });
+  await dm.motor_run_to_relative_position(target, { motor: le.MOTOR_LEFT, blocking: false });
+  await dm.motor_run_to_relative_position(rightTarget, { motor: le.MOTOR_RIGHT, blocking: false });
+  const result = await waitForMove(dm, () => dm.motor, near);
+  log(`Skewer ${result} (left motor at ${dm.motor[0].position}°)`);
+  return result;
+}
+
+const skewerTo = key => moveSkewer(settings.skewer[key], key);
+
+async function raiseSkewer() {
+  const result = await skewerTo('up');
+  if (result !== 'reached') {
+    throw new Error(`The skewer couldn't get back up (${result} at ${devices.double.motor[0].position}°).`);
+  }
+}
+
+async function stab() {
+  const down = await skewerTo('down');
+  if (down !== 'reached') log(`Skewer ${down} before reaching Down, so heading back up.`);
+  await pause(settings.skewer.dwellMs);
+  await raiseSkewer();
+}
+
+async function stopAllMotors() {
+  const sends = [];
+  if (isConnected('single')) sends.push(() => devices.single.motor_stop({ blocking: false }));
+  if (isConnected('double')) sends.push(() => devices.double.motor_stop({ motor: le.MOTOR_BOTH, blocking: false }));
+  for (const send of sends) {
+    // A write already in flight can make this one fail, so retry a couple of times.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { await send(); break; } catch (e) { await sleep(60); }
+    }
+  }
+}
+
+function emergencyStop() {
+  stopRequested = true;
+  log('STOP pressed');
+  stopAllMotors();
+}
+
+// Only one motion task at a time. `quiet` tasks (from Settings) report errors to the log only.
+async function runExclusive(task, quiet = false) {
+  if (busy) { toast('One moment, the robot is still busy.'); return; }
+  busy = true;
+  stopRequested = false;
+  render();
+  try {
+    await task();
+  } catch (err) {
+    await stopAllMotors();
+    const stopped = err instanceof StopRequested;
+    log(stopped ? 'Stopped.' : `Error: ${err.message}`);
+    if (!quiet) {
+      if (stopped) setStatus('stopped', 'Stopped', 'Press Home when you’re ready to reset the robot.');
+      else setStatus('error', 'Pardon the interruption', `${err.message} Press Home to reset.`);
+    }
+  } finally {
+    busy = false;
+    ui.active = null;
+    if (ui.mode === 'busy') ui.mode = 'idle';
+    render();
+  }
+}
+
+// ── Main actions ──
+function serveCheese(index) {
+  const plate = index + 1;
+  const name = cheeses[index].name;
+  runExclusive(async () => {
+    ui.active = plate;
+    setStatus('busy', `Fetching your ${name}…`, `On the way to plate ${plate}.`);
+    await raiseSkewer();
+    await carriageTo(`plate${plate}`);
+
+    setStatus('busy', `Selecting a piece of ${name}…`, 'Just a moment.');
+    await stab();
+
+    setStatus('busy', `Bringing your ${name} to you…`, 'Almost there.');
+    await carriageTo('home');
+
+    ui.servedSlot = plate;
+    setStatus('served', `Voilà, your ${name}`, 'Please slide it gently off the skewer. Bon appétit!');
+    log(`Served ${name}.`);
+  });
+}
+
+function goHome() {
+  runExclusive(async () => {
+    ui.active = 0;
+    setStatus('busy', 'Returning home…', 'One moment, please.');
+    await raiseSkewer();
+    await carriageTo('home');
+    setStatus('idle');
+  });
+}
+
+function onTileClick(slot) {
+  if (busy) return;
+  if (!robotReady()) { toast('The robot isn’t connected yet. Open Settings (top right).'); return; }
+  if (slot === 0) goHome();
+  else serveCheese(slot - 1);
+}
+
+// ── Settings actions ──
+function captureCarriage(key) {
+  if (!isConnected('single') || isNaN(devices.single.motor.position)) { log('Connect the single motor first.'); return; }
+  settings.carriage[key] = devices.single.motor.position;
+  saveSettings(); syncInputs();
+  log(`${stopLabel(key)} set to ${settings.carriage[key]}°`);
+}
+
+function captureSkewer(key) {
+  if (!isConnected('double') || isNaN(devices.double.motor[0].position)) { log('Connect the double motor first.'); return; }
+  settings.skewer[key] = devices.double.motor[0].position;
+  saveSettings(); syncInputs();
+  log(`Skewer ${key} set to ${settings.skewer[key]}°`);
+}
+
+function testCarriage(key) {
+  runExclusive(async () => {
+    if (isConnected('double')) await raiseSkewer();
+    else log('Skewer not connected, so moving the carriage without raising it first.');
+    await carriageTo(key);
+  }, true);
+}
+
+function testSkewer(key) {
+  runExclusive(async () => {
+    const result = await skewerTo(key);
+    if (result !== 'reached') throw new Error(`Skewer ${result} before reaching ${key}.`);
+  }, true);
+}
+
+function testStab() {
+  runExclusive(async () => {
+    await raiseSkewer();
+    await stab();
+    log('Test stab complete.');
+  }, true);
+}
+
+function jogCarriage(deg) {
+  runExclusive(async () => {
+    const sm = need('single');
+    await sm.motor_run_for_degrees(Math.abs(deg), { direction: deg < 0 ? CCW : CW, speed: settings.carriage.speed, blocking: false });
+    await waitForMove(sm, () => [sm.motor], () => true);
+    log(`Carriage jogged ${deg}°, now at ${sm.motor.position}°`);
+  }, true);
+}
+
+function jogSkewer(deg) {
+  runExclusive(async () => {
+    const dm = need('double');
+    await moveSkewer(dm.motor[0].position + deg, `jog ${deg > 0 ? '+' : ''}${deg}°`);
+  }, true);
+}
+
+function zeroSkewer() {
+  runExclusive(async () => {
+    const dm = need('double');
+    await dm.motor_reset_relative_position({ motor: le.MOTOR_LEFT, position: 0, blocking: false });
+    await dm.motor_reset_relative_position({ motor: le.MOTOR_RIGHT, position: 0, blocking: false });
+    await sleep(300);
+    log(`Skewer zeroed: this spot is now 0°. Motors read L ${dm.motor[0].position}°, R ${dm.motor[1].position}°.`);
+  }, true);
+}
+
+function rezeroCarriage() {
+  runExclusive(async () => {
+    const sm = need('single');
+    await sm.motor_reset_relative_position({ position: settings.carriage.home, blocking: false });
+    await sleep(300);
+    log(`Re-zeroed: this spot is now Home (${settings.carriage.home}°). Motor reads ${sm.motor.position}°.`);
+  }, true);
+}
+
+function restoreCheeses() {
+  cheeses = structuredClone(CHEESES);
+  try { localStorage.removeItem(CHEESES_KEY); } catch (e) {}
+  syncInputs(); buildTiles();
+  log('Cheeses restored from the file.');
+}
+
+function resetAllSettings() {
+  if (!confirm('Reset all positions, speeds and cheese names to the values in the file?')) return;
+  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(CHEESES_KEY); } catch (e) {}
+  settings = loadSettings();
+  cheeses = loadCheeses();
+  syncInputs(); buildTiles();
+  log('All settings reset to the file defaults.');
+}
+
+function openSettings() { syncInputs(); updateReadouts(); settingsDialog.showModal(); }
+function closeSettings() { settingsDialog.close(); }
+settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) closeSettings(); });
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.().catch(e => log(`Fullscreen: ${e.message}`));
+}
+
+// Keep the tablet screen on during the event.
+async function requestWakeLock() {
+  if (wakeLock || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch (e) { /* not allowed here; the screen may dim */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && (isConnected('single') || isConnected('double'))) requestWakeLock();
+});
+
+// ── Rendering ──
+function setStatus(mode, title = '', detail = '') {
+  Object.assign(ui, { mode, title, detail });
+  clearTimeout(servedTimer);
+  if (mode === 'served') servedTimer = setTimeout(() => { if (ui.mode === 'served') setStatus('idle'); }, SERVED_MESSAGE_MS);
+  render();
+}
+
+function render() {
+  const ready = robotReady();
+  document.body.classList.toggle('is-busy', busy);
+  document.body.dataset.mode = ui.mode;
+
+  for (const key of ['single', 'double']) {
+    document.getElementById(`conn-${key}`).classList.toggle('on', isConnected(key));
+    document.getElementById(`dot-${key}`).classList.toggle('on', isConnected(key));
+  }
+
+  document.querySelectorAll('.tile').forEach(tile => {
+    const slot = Number(tile.dataset.slot);
+    tile.classList.toggle('is-active', busy && ui.active === slot);
+    tile.classList.toggle('is-dim', busy && ui.active !== slot);
+    tile.classList.toggle('is-served', !busy && ui.mode === 'served' && ui.servedSlot === slot);
+    tile.classList.toggle('is-unavailable', !busy && !ready);
+    tile.setAttribute('aria-disabled', String(busy || !ready));
+  });
+
+  let { title, detail } = ui;
+  if (ui.mode === 'idle') {
+    if (ready) [title, detail] = ['Please choose a cheese', 'Tap a plate and the robot will fetch a piece for you.'];
+    else if (!navigator.bluetooth) [title, detail] = ['The cheese robot is resting', 'This browser has no Web Bluetooth. Use Chrome or Edge.'];
+    else [title, detail] = ['The cheese robot is resting', 'Open Settings (top right) to connect the motors.'];
+  }
+  document.getElementById('msg-title').textContent = title;
+  document.getElementById('msg-detail').textContent = detail;
+}
+
+function buildTiles() {
+  const slots = [
+    { label: 'Robot', name: 'Home', description: 'Return to the start', home: true },
+    ...cheeses.map((c, i) => ({ label: `Plate ${i + 1}`, ...c })),
+  ];
+  const tiles = document.getElementById('tiles');
+  tiles.replaceChildren(...slots.map((s, slot) => {
+    const btn = document.createElement('button');
+    btn.className = s.home ? 'tile tile-home' : 'tile';
+    btn.dataset.slot = slot;
+    if (!s.home) btn.style.setProperty('--cheese', s.color);
+    btn.innerHTML = `<span class="tile-label"></span>${s.home ? ICONS.home : ICONS.cheese}<span class="tile-name"></span><span class="tile-desc"></span>`;
+    btn.querySelector('.tile-label').textContent = s.label;
+    btn.querySelector('.tile-name').textContent = s.name;
+    btn.querySelector('.tile-desc').textContent = s.description;
+    btn.addEventListener('click', () => onTileClick(slot));
+    return btn;
+  }));
+  document.querySelectorAll('[data-plate-name]').forEach(el => { el.textContent = cheeses[el.dataset.plateName - 1].name; });
+  render();
+}
+
+function buildSettingsRows() {
+  document.getElementById('carriage-rows').innerHTML = CARRIAGE_STOPS.map(([key, label], i) => `
+    <div class="pos-row">
+      <span class="pos-label">${label}${i ? ` <em data-plate-name="${i}"></em>` : ''}</span>
+      <input type="number" step="1" data-cfg="carriage.${key}" aria-label="${label} position">
+      <button class="btn" onclick="captureCarriage('${key}')">Use current</button>
+      <button class="btn" onclick="testCarriage('${key}')">Go</button>
+    </div>`).join('');
+
+  document.getElementById('skewer-rows').innerHTML = SKEWER_STOPS.map(([key, label, note]) => `
+    <div class="pos-row">
+      <span class="pos-label">${label} <em>${note}</em></span>
+      <input type="number" step="1" data-cfg="skewer.${key}" aria-label="Skewer ${label} position">
+      <button class="btn" onclick="captureSkewer('${key}')">Use current</button>
+      <button class="btn" onclick="testSkewer('${key}')">Go</button>
+    </div>`).join('');
+
+  document.getElementById('cheese-rows').innerHTML = cheeses.map((c, i) => `
+    <div class="cheese-row">
+      <span class="pos-label">Plate ${i + 1}</span>
+      <input type="text" data-cheese="${i}" data-field="name" aria-label="Plate ${i + 1} cheese name" placeholder="Name">
+      <input type="text" data-cheese="${i}" data-field="description" aria-label="Plate ${i + 1} description" placeholder="Description">
+      <input type="color" data-cheese="${i}" data-field="color" aria-label="Plate ${i + 1} color">
+    </div>`).join('');
+
+  document.querySelectorAll('[data-cfg]').forEach(el => el.addEventListener('change', () => {
+    const [group, key] = el.dataset.cfg.split('.');
+    let value = el.value;
+    if (el.type === 'number') {
+      value = Math.round(Number(value));
+      if (el.value.trim() === '' || !Number.isFinite(value)) { syncInputs(); return; }
+      if (el.min !== '') value = Math.max(Number(el.min), value);
+      if (el.max !== '') value = Math.min(Number(el.max), value);
+    }
+    settings[group][key] = value;
+    saveSettings(); syncInputs();
+    log(`Saved ${el.dataset.cfg} = ${value}`);
+  }));
+
+  document.querySelectorAll('[data-cheese]').forEach(el => el.addEventListener('input', () => {
+    cheeses[el.dataset.cheese][el.dataset.field] = el.value;
+    saveCheeses(); buildTiles();
+  }));
+}
+
+function syncInputs() {
+  document.querySelectorAll('[data-cfg]').forEach(el => {
+    const [group, key] = el.dataset.cfg.split('.');
+    el.value = settings[group][key];
+  });
+  document.querySelectorAll('[data-cheese]').forEach(el => { el.value = cheeses[el.dataset.cheese][el.dataset.field]; });
+}
+
+function motorText(m) {
+  if (isNaN(m.position)) return 'waiting for data…';
+  const state = MOTOR_STATE_NAMES[m.motorState] ?? m.motorState;
+  return `pos ${String(m.position).padStart(6)}°  abs ${String(m.absolutePosition).padStart(3)}°  speed ${String(m.speed).padStart(4)}  ${state}`;
+}
+
+function updateReadouts() {
+  const sm = devices.single, dm = devices.double;
+  document.getElementById('readout-single').textContent = isConnected('single')
+    ? `${motorText(sm.motor)}\nbattery ${sm.info_device?.batteryLevel ?? '–'}%`
+    : 'Not connected';
+  document.getElementById('readout-double').textContent = isConnected('double')
+    ? `L ${motorText(dm.motor[0])}\nR ${motorText(dm.motor[1])}\nbattery ${dm.info_device?.batteryLevel ?? '–'}%`
+    : 'Not connected';
+}
+setInterval(() => { if (settingsDialog.open) updateReadouts(); }, 150);
+
+// ── Start up ──
+document.getElementById('brand').textContent = TITLE;
+document.title = TITLE;
+buildSettingsRows();
+syncInputs();
+buildTiles();
+setStatus('idle');
+log(navigator.bluetooth ? 'Ready. Open Settings to connect the motors.' : 'Web Bluetooth is not available. Use Chrome or Edge.');
+</script>
+</body>
+</html>
