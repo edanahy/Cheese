@@ -21,6 +21,12 @@ const TITLE = 'The Cheese Course';
 // Starting calibration. Values changed in Settings are saved on the device and
 // take priority. Settings → "Reset to file defaults" returns to these.
 const DEFAULT_SETTINGS = {
+  play: {
+    mode: 'auto',            // 'auto': tap a cheese and the robot serves it; 'aim': guests aim and stab, claw-machine style
+    nudgeDeg: 20,            // carriage degrees per arrow tap (aim mode)
+    aimRange: 150,           // how far guests can nudge either side of a plate (aim mode)
+    arrows: 'normal',        // 'normal' (▶ heads toward Plate 3, like the tiles) or 'reversed'
+  },
   carriage: {                // Single motor: position counter, in degrees
     home: 0, plate1: 360, plate2: 720, plate3: 1080,
     speed: 50,               // %
@@ -65,8 +71,7 @@ const DEFAULT_SETTINGS = {
   /* ── Main screen ── */
   .app {
     min-height: 100dvh;
-    display: grid;
-    grid-template-rows: auto auto 1fr;
+    display: flex; flex-direction: column;
     padding-bottom: clamp(16px, 3vh, 32px);
   }
 
@@ -105,6 +110,7 @@ const DEFAULT_SETTINGS = {
   body[data-mode="stopped"] .message h1 { color: #e8a49f; }
 
   .tiles {
+    flex: 1;
     display: grid; grid-template-columns: repeat(4, 1fr);
     gap: clamp(12px, 2vw, 24px);
     padding: 0 clamp(16px, 3vw, 40px);
@@ -130,7 +136,7 @@ const DEFAULT_SETTINGS = {
   .tile-home { background: transparent; border-style: dashed; }
 
   .tile.is-active { border-color: var(--gold); animation: glow 1.6s ease-in-out infinite; }
-  .tile.is-served { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 0 50px -10px var(--gold); }
+  .tile.is-served, .tile.is-here { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 0 50px -10px var(--gold); }
   .tile.is-dim { opacity: 0.3; }
   .tile.is-unavailable { opacity: 0.45; filter: saturate(0.4); }
   @keyframes glow {
@@ -138,6 +144,49 @@ const DEFAULT_SETTINGS = {
     50%      { box-shadow: 0 0 0 2px var(--gold), 0 0 64px -4px var(--gold); }
   }
   @media (prefers-reduced-motion: reduce) { .tile.is-active { animation: none; box-shadow: 0 0 0 2px var(--gold); } }
+
+  /* Aim controls (Guest aims mode) */
+  .aim {
+    display: grid;
+    grid-template-columns: minmax(96px, 180px) minmax(180px, 340px) minmax(96px, 180px);
+    justify-content: center; align-items: center;
+    gap: 14px clamp(12px, 2vw, 24px);
+    padding: 0 16px clamp(16px, 3vh, 28px);
+  }
+  .aim[hidden] { display: none; }
+  .aim button {
+    height: clamp(76px, 12vh, 112px); cursor: pointer;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    transition: transform 0.12s ease, opacity 0.2s;
+  }
+  .aim button:active { transform: scale(0.96); }
+  .aim button:disabled { opacity: 0.35; cursor: default; transform: none; }
+  .aim-btn {
+    display: grid; place-items: center;
+    border-radius: 22px; border: 1px solid var(--line); background: var(--surface); color: var(--gold);
+  }
+  .aim-btn svg { width: clamp(36px, 5vw, 52px); height: auto; }
+  .aim-btn.is-edge { opacity: 0.35; }
+  .aim-stab {
+    border: 0; border-radius: 999px; background: var(--gold); color: #1b150c;
+    font: 600 clamp(1.5rem, 2.8vw, 2.2rem) var(--serif); letter-spacing: 0.2em; text-transform: uppercase;
+    box-shadow: 0 12px 34px -12px var(--gold);
+  }
+  .aim-track { grid-column: 1 / -1; position: relative; height: 4px; border-radius: 2px; background: var(--line); }
+  .aim-track::before {
+    content: ''; position: absolute; left: 50%; top: -5px; width: 2px; height: 14px;
+    background: var(--muted); transform: translateX(-50%);
+  }
+  .aim-marker {
+    position: absolute; top: 50%; left: 50%; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--gold); transform: translate(-50%, -50%); transition: left 0.15s ease;
+  }
+
+  body.is-aiming .message { padding-top: clamp(10px, 2vh, 20px); padding-bottom: clamp(12px, 2vh, 20px); }
+  body.is-aiming .message::after { margin-top: 12px; }
+  body.is-aiming .tile { min-height: 150px; gap: 8px; padding: 16px 12px; }
+  body.is-aiming .tile-icon { width: clamp(44px, 6vw, 80px); }
+  body.is-aiming .tile-name { font-size: clamp(1.3rem, 2.4vw, 2.1rem); }
 
   .stop {
     position: fixed; left: 50%; bottom: clamp(16px, 4vh, 40px); transform: translateX(-50%);
@@ -160,6 +209,7 @@ const DEFAULT_SETTINGS = {
     .tiles { grid-template-columns: repeat(2, 1fr); }
     .tile { min-height: 180px; }
     .conn span { display: none; }
+    .aim { grid-template-columns: 1fr 1.5fr 1fr; }
   }
 
   /* ── Settings dialog ── */
@@ -259,6 +309,17 @@ const DEFAULT_SETTINGS = {
     <p id="msg-detail"></p>
   </section>
 
+  <section class="aim" id="aim" hidden>
+    <button class="aim-btn" id="aim-left" aria-label="Nudge left">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 L8 12 L15 19"/></svg>
+    </button>
+    <button class="aim-stab" id="aim-stab" onclick="aimStab()">Stab</button>
+    <button class="aim-btn" id="aim-right" aria-label="Nudge right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5 L16 12 L9 19"/></svg>
+    </button>
+    <div class="aim-track" aria-hidden="true"><span class="aim-marker" id="aim-marker"></span></div>
+  </section>
+
   <main class="tiles" id="tiles"></main>
 </div>
 
@@ -296,6 +357,32 @@ const DEFAULT_SETTINGS = {
           <div class="readout" id="readout-double">Not connected</div>
         </div>
       </div>
+    </section>
+
+    <section class="panel">
+      <h3>Play mode</h3>
+      <div class="fields">
+        <label>Mode
+          <select data-cfg="play.mode">
+            <option value="auto">Automatic</option>
+            <option value="aim">Guest aims (claw machine)</option>
+          </select>
+        </label>
+        <label>Nudge step (°) <input type="number" min="1" max="720" data-cfg="play.nudgeDeg"></label>
+        <label>Aim range (± ° from plate) <input type="number" min="0" max="5000" data-cfg="play.aimRange"></label>
+        <label>Arrow direction
+          <select data-cfg="play.arrows">
+            <option value="normal">Normal (▶ toward Plate 3)</option>
+            <option value="reversed">Reversed</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">
+        <em>Automatic</em>: tapping a cheese drives there, stabs, and brings it home.
+        <em>Guest aims</em>: tapping a cheese drives there and shows ◀ Stab ▶ controls. The arrows move the carriage by the nudge step
+        (hold to keep going), up to the aim range either side of the plate. Guests can stab as often as they like, then tap Home.
+        The nudge, range and arrow settings only apply to Guest aims.
+      </p>
     </section>
 
     <section class="panel">
@@ -389,9 +476,12 @@ const SKEWER_TOLERANCE   = 10;
 const POLL_MS            = 50;
 const START_GRACE_MS     = 350;    // let a move get going before judging whether it has finished
 const SETTLE_MS          = 800;    // motionless this long away from the target = it gave up
+const QUICK_SETTLE_MS    = 200;    // same, on the stab's way down, where stopping short just means it hit bottom
 const STALL_MS           = 250;
 const MOVE_TIMEOUT_MS    = 20000;
 const SERVED_MESSAGE_MS  = 15000;
+const NUDGE_HOLD_MS      = 400;    // hold an arrow this long before it starts repeating
+const NUDGE_REPEAT_MS    = 150;
 
 const SETTINGS_KEY = 'cheese-robot.settings';
 const CHEESES_KEY  = 'cheese-robot.cheeses';
@@ -413,8 +503,9 @@ let settings = loadSettings();
 let cheeses = loadCheeses();
 const devices = { single: null, double: null };
 let busy = false, stopRequested = false;
-const ui = { mode: 'idle', title: '', detail: '', active: null, servedSlot: null };
-let servedTimer = null, toastTimer = null, wakeLock = null;
+// ui.aim is set while guests are aiming at a plate: { plate, center, target, stabs }
+const ui = { mode: 'idle', title: '', detail: '', active: null, servedSlot: null, aim: null };
+let servedTimer = null, toastTimer = null, wakeLock = null, aimSending = null;
 const logLines = [];
 const settingsDialog = document.getElementById('settings');
 
@@ -523,20 +614,26 @@ function need(key) {
 // Moves are sent without waiting for the device's reply. Instead we watch the live
 // motor notifications, so long moves don't hit the library's 5 s reply timeout.
 // Resolves 'reached', 'stalled', or 'short' (stopped moving, but not at the target).
-async function waitForMove(dev, getMotors, atTarget) {
+// `quick` (the stab's way down) counts it as reached the moment it's within tolerance, without
+// waiting for the motors to settle, and accepts a stall or stop sooner, so the pause at the bottom
+// isn't padded by waiting.
+async function waitForMove(dev, getMotors, atTarget, quick = false) {
   const start = performance.now();
+  const settleMs = quick ? QUICK_SETTLE_MS : SETTLE_MS;
+  const stallMs = quick ? 0 : STALL_MS;
   let stillSince = null, stalledSince = null;
   for (;;) {
     await sleep(POLL_MS);
     checkStop();
     if (!dev.connected) throw new Error('A motor disconnected mid-move.');
     const now = performance.now() - start;
+    if (quick && atTarget()) return 'reached';
     if (now < START_GRACE_MS) continue;
 
     const motors = getMotors();
     if (motors.some(m => m.motorState === le.MOTOR_STATE_STALLED)) {
       stalledSince ??= now;
-      if (now - stalledSince >= STALL_MS) return 'stalled';
+      if (now - stalledSince >= stallMs) return 'stalled';
     } else {
       stalledSince = null;
     }
@@ -547,30 +644,32 @@ async function waitForMove(dev, getMotors, atTarget) {
       return 'reached';
     } else {
       stillSince ??= now;
-      if (now - stillSince >= SETTLE_MS) return 'short';
+      if (now - stillSince >= settleMs) return 'short';
     }
     if (now > MOVE_TIMEOUT_MS) throw new Error('A move took too long and was cancelled.');
   }
 }
 
-async function carriageTo(key) {
+async function moveCarriage(target, label) {
   const sm = need('single');
-  const target = Math.round(settings.carriage[key]);
+  target = Math.round(target);
   const near = () => Math.abs(sm.motor.position - target) <= CARRIAGE_TOLERANCE;
   if (near() && !isMoving(sm.motor)) return;
 
-  log(`Carriage → ${stopLabel(key)}: ${sm.motor.position}° → ${target}°`);
+  log(`Carriage → ${label}: ${sm.motor.position}° → ${target}°`);
   await sm.motor_run_to_relative_position(target, { speed: settings.carriage.speed, blocking: false });
   const result = await waitForMove(sm, () => [sm.motor], near);
   if (result !== 'reached') {
-    throw new Error(`The carriage ${result === 'stalled' ? 'stalled' : 'stopped'} at ${sm.motor.position}° on the way to ${stopLabel(key)} (${target}°).`);
+    throw new Error(`The carriage ${result === 'stalled' ? 'stalled' : 'stopped'} at ${sm.motor.position}° on the way to ${label} (${target}°).`);
   }
-  log(`Carriage at ${stopLabel(key)} (${sm.motor.position}°)`);
+  log(`Carriage at ${label} (${sm.motor.position}°)`);
 }
+
+const carriageTo = key => moveCarriage(settings.carriage[key], stopLabel(key));
 
 // Move both linked skewer motors so the left one's counter reaches `target`.
 // Resolves like waitForMove: 'reached', 'stalled' or 'short'.
-async function moveSkewer(target, label) {
+async function moveSkewer(target, label, quick = false) {
   const dm = need('double');
   target = Math.round(target);
   const near = () => Math.abs(dm.motor[0].position - target) <= SKEWER_TOLERANCE;
@@ -582,17 +681,18 @@ async function moveSkewer(target, label) {
   const rightTarget = rightMirrored() ? left + right - target : target + right - left;
 
   log(`Skewer → ${label}: left ${left}° → ${target}°, right ${right}° → ${rightTarget}°`);
+  const start = performance.now();
   // Speeds first, then the two moves back-to-back, so the motors start together.
   await dm.motor_set_speed(settings.skewer.speed, { motor: le.MOTOR_LEFT, blocking: false });
   await dm.motor_set_speed(settings.skewer.speed, { motor: le.MOTOR_RIGHT, blocking: false });
   await dm.motor_run_to_relative_position(target, { motor: le.MOTOR_LEFT, blocking: false });
   await dm.motor_run_to_relative_position(rightTarget, { motor: le.MOTOR_RIGHT, blocking: false });
-  const result = await waitForMove(dm, () => dm.motor, near);
-  log(`Skewer ${result} (left motor at ${dm.motor[0].position}°)`);
+  const result = await waitForMove(dm, () => dm.motor, near, quick);
+  log(`Skewer ${result} after ${Math.round(performance.now() - start)} ms (left motor at ${dm.motor[0].position}°)`);
   return result;
 }
 
-const skewerTo = key => moveSkewer(settings.skewer[key], key);
+const skewerTo = (key, quick = false) => moveSkewer(settings.skewer[key], key, quick);
 
 async function raiseSkewer() {
   const result = await skewerTo('up');
@@ -602,8 +702,9 @@ async function raiseSkewer() {
 }
 
 async function stab() {
-  const down = await skewerTo('down');
+  const down = await skewerTo('down', true);
   if (down !== 'reached') log(`Skewer ${down} before reaching Down, so heading back up.`);
+  log(`Pausing ${settings.skewer.dwellMs} ms at the bottom`);
   await pause(settings.skewer.dwellMs);
   await raiseSkewer();
 }
@@ -631,10 +732,14 @@ async function runExclusive(task, quiet = false) {
   if (busy) { toast('One moment, the robot is still busy.'); return; }
   busy = true;
   stopRequested = false;
+  // Settings tests move the robot around, so any aiming in progress no longer matches it.
+  if (quiet && ui.aim) { ui.aim = null; ui.mode = 'idle'; }
   render();
   try {
+    await aimSending;   // let the last nudge command finish going out first
     await task();
   } catch (err) {
+    ui.aim = null;
     await stopAllMotors();
     const stopped = err instanceof StopRequested;
     log(stopped ? 'Stopped.' : `Error: ${err.message}`);
@@ -673,19 +778,116 @@ function serveCheese(index) {
 }
 
 function goHome() {
+  // In aim mode, coming home after a stab means the guest has (hopefully) caught some cheese.
+  const caught = ui.aim?.stabs ? ui.aim.plate : null;
   runExclusive(async () => {
     ui.active = 0;
+    ui.aim = null;
     setStatus('busy', 'Returning home…', 'One moment, please.');
     await raiseSkewer();
     await carriageTo('home');
-    setStatus('idle');
+    if (caught) {
+      ui.servedSlot = caught;
+      setStatus('served', `Voilà, your ${cheeses[caught - 1].name}`, 'Please slide it gently off the skewer. Bon appétit!');
+    } else {
+      setStatus('idle');
+    }
   });
+}
+
+// ── Aim mode ──
+function goToPlate(index) {
+  const plate = index + 1;
+  const name = cheeses[index].name;
+  runExclusive(async () => {
+    ui.active = plate;
+    ui.aim = null;
+    setStatus('busy', `On the way to the ${name}…`, `Heading to plate ${plate}.`);
+    await raiseSkewer();
+    await carriageTo(`plate${plate}`);
+    const center = Math.round(settings.carriage[`plate${plate}`]);
+    ui.aim = { plate, center, target: center, stabs: 0 };
+    setStatus('aiming', `Aim for the ${name}`, 'Use the arrows to line up the skewer, then press Stab.');
+  });
+}
+
+function aimStab() {
+  if (!ui.aim || busy) return;
+  const { plate } = ui.aim;
+  const name = cheeses[plate - 1].name;
+  runExclusive(async () => {
+    ui.active = plate;
+    setStatus('busy', `Spearing the ${name}…`, 'Fingers crossed!');
+    await moveCarriage(ui.aim.target, `${stopLabel(`plate${plate}`)} (aimed)`);
+    await stab();
+    ui.aim.stabs++;
+    setStatus('aiming', 'Did you get it?', `If the ${name} is on the skewer, tap Home. If not, adjust and stab again.`);
+  });
+}
+
+// +1 when ▶ should raise the carriage counter. The tiles run Home → Plate 3 left to right.
+function rightSign() {
+  const layout = Math.sign(settings.carriage.plate3 - settings.carriage.home) || 1;
+  return settings.play.arrows === 'reversed' ? -layout : layout;
+}
+
+// Where one nudge (dir: -1 = ◀, +1 = ▶) would put the carriage, kept within the aim range.
+function nudgeTarget(dir) {
+  const { center, target } = ui.aim;
+  const next = target + dir * rightSign() * settings.play.nudgeDeg;
+  return Math.min(center + settings.play.aimRange, Math.max(center - settings.play.aimRange, next));
+}
+
+function nudge(dir) {
+  if (!ui.aim || busy || !robotReady()) return false;
+  const next = nudgeTarget(dir);
+  if (next === ui.aim.target) return false;
+  ui.aim.target = next;
+  render();
+  sendAimTarget();
+  return true;
+}
+
+// Nudges don't wait for the carriage: each one just retargets it, so taps feel instant.
+// Only one send is in flight at a time; it always catches up to the newest target.
+function sendAimTarget() {
+  if (!aimSending) aimSending = pushAimTarget().finally(() => { aimSending = null; });
+}
+async function pushAimTarget() {
+  let sent;
+  try {
+    while (ui.aim && sent !== ui.aim.target) {
+      sent = ui.aim.target;
+      await devices.single.motor_run_to_relative_position(sent, { speed: settings.carriage.speed, blocking: false });
+    }
+  } catch (err) {
+    log(`Nudge failed: ${err.message}`);
+  }
+}
+
+// Arrows nudge once on press, then keep nudging while held.
+function bindNudgeButton(id, dir) {
+  const btn = document.getElementById(id);
+  btn.addEventListener('pointerdown', () => {
+    if (!nudge(dir)) return;
+    const done = new AbortController();
+    let timer = setTimeout(() => {
+      timer = setInterval(() => { if (!nudge(dir)) release(); }, NUDGE_REPEAT_MS);
+    }, NUDGE_HOLD_MS);
+    const release = () => { clearTimeout(timer); clearInterval(timer); done.abort(); };
+    // Listen on window: the button may be disabled (and deaf) by the time the finger lifts.
+    window.addEventListener('pointerup', release, { signal: done.signal });
+    window.addEventListener('pointercancel', release, { signal: done.signal });
+  });
+  btn.addEventListener('click', e => { if (e.detail === 0) nudge(dir); });   // keyboard activation
+  btn.addEventListener('contextmenu', e => e.preventDefault());
 }
 
 function onTileClick(slot) {
   if (busy) return;
   if (!robotReady()) { toast('The robot isn’t connected yet. Open Settings (top right).'); return; }
   if (slot === 0) goHome();
+  else if (settings.play.mode === 'aim') goToPlate(slot - 1);
   else serveCheese(slot - 1);
 }
 
@@ -810,6 +1012,7 @@ function setStatus(mode, title = '', detail = '') {
 function render() {
   const ready = robotReady();
   document.body.classList.toggle('is-busy', busy);
+  document.body.classList.toggle('is-aiming', !!ui.aim);
   document.body.dataset.mode = ui.mode;
 
   for (const key of ['single', 'double']) {
@@ -822,13 +1025,28 @@ function render() {
     tile.classList.toggle('is-active', busy && ui.active === slot);
     tile.classList.toggle('is-dim', busy && ui.active !== slot);
     tile.classList.toggle('is-served', !busy && ui.mode === 'served' && ui.servedSlot === slot);
+    tile.classList.toggle('is-here', !busy && ui.aim?.plate === slot);
     tile.classList.toggle('is-unavailable', !busy && !ready);
     tile.setAttribute('aria-disabled', String(busy || !ready));
   });
 
+  document.getElementById('aim').hidden = !ui.aim;
+  if (ui.aim) {
+    const locked = busy || !ready;
+    document.getElementById('aim-stab').disabled = locked;
+    for (const [id, dir] of [['aim-left', -1], ['aim-right', 1]]) {
+      const btn = document.getElementById(id);
+      btn.disabled = locked;
+      btn.classList.toggle('is-edge', nudgeTarget(dir) === ui.aim.target);
+    }
+    const offset = (ui.aim.target - ui.aim.center) * rightSign();
+    document.getElementById('aim-marker').style.left = `${50 + 50 * offset / (settings.play.aimRange || 1)}%`;
+  }
+
   let { title, detail } = ui;
   if (ui.mode === 'idle') {
-    if (ready) [title, detail] = ['Please choose a cheese', 'Tap a plate and the robot will fetch a piece for you.'];
+    if (ready && settings.play.mode === 'aim') [title, detail] = ['Choose your cheese', 'Tap a plate to drive there, then aim and stab!'];
+    else if (ready) [title, detail] = ['Please choose a cheese', 'Tap a plate and the robot will fetch a piece for you.'];
     else if (!navigator.bluetooth) [title, detail] = ['The cheese robot is resting', 'This browser has no Web Bluetooth. Use Chrome or Edge.'];
     else [title, detail] = ['The cheese robot is resting', 'Open Settings (top right) to connect the motors.'];
   }
@@ -895,6 +1113,8 @@ function buildSettingsRows() {
     settings[group][key] = value;
     saveSettings(); syncInputs();
     log(`Saved ${el.dataset.cfg} = ${value}`);
+    if (el.dataset.cfg === 'play.mode' && ui.aim) { ui.aim = null; setStatus('idle'); }
+    render();
   }));
 
   document.querySelectorAll('[data-cheese]').forEach(el => el.addEventListener('input', () => {
@@ -934,6 +1154,13 @@ document.title = TITLE;
 buildSettingsRows();
 syncInputs();
 buildTiles();
+bindNudgeButton('aim-left', -1);
+bindNudgeButton('aim-right', 1);
+document.addEventListener('keydown', e => {   // arrow keys nudge too (handy on a laptop)
+  if (!ui.aim || settingsDialog.open) return;
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); nudge(-1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); nudge(1); }
+});
 setStatus('idle');
 log(navigator.bluetooth ? 'Ready. Open Settings to connect the motors.' : 'Web Bluetooth is not available. Use Chrome or Edge.');
 </script>
